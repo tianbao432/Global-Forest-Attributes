@@ -1,0 +1,125 @@
+// ==============================================================================
+// Landsat 8/9 全球 SWIR1 (B6) 1km 导出管线 - 完善版
+// 重点：覆盖完整性 + 高纬度可视化诊断
+// ==============================================================================
+
+// ------------------------------------------------------------------
+// 1. 去云/去云阴影/去雪/去卷云函数 (Collection 2 QA_PIXEL)
+// ------------------------------------------------------------------
+function maskL89sr(image) {
+  var qa = image.select('QA_PIXEL');
+  // Bit 1: Dilated Cloud, Bit 2: Cirrus, Bit 3: Cloud, Bit 4: Cloud Shadow, Bit 5: Snow
+  var dilatedCloud  = (1 << 1);
+  var cirrus        = (1 << 2);
+  var cloud         = (1 << 3);
+  var cloudShadow   = (1 << 4);
+  var snow          = (1 << 5);
+
+  var mask = qa.bitwiseAnd(dilatedCloud).eq(0)
+               .and(qa.bitwiseAnd(cirrus).eq(0))
+               .and(qa.bitwiseAnd(cloud).eq(0))
+               .and(qa.bitwiseAnd(cloudShadow).eq(0))
+               .and(qa.bitwiseAnd(snow).eq(0));
+
+  // 同时利用 SR_QA_AEROSOL（高气溶胶 = 不可信）
+  var saturationMask = image.select('QA_RADSAT').eq(0);
+
+  return image.updateMask(mask).updateMask(saturationMask);
+}
+
+// ------------------------------------------------------------------
+// 2. 辐射定标
+// ------------------------------------------------------------------
+function applyScaleFactors(image) {
+  var opticalBands = image.select('SR_B.').multiply(0.0000275).add(-0.2);
+  // 反射率合理范围 [0, 1] 截断
+  opticalBands = opticalBands.updateMask(
+    opticalBands.gte(0).and(opticalBands.lte(1)).reduce(ee.Reducer.min())
+  );
+  return image.addBands(opticalBands, null, true);
+}
+
+// ------------------------------------------------------------------
+// 3. 合并 Landsat 8 + Landsat 9，放宽云覆盖阈值
+// ------------------------------------------------------------------
+var L8 = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2");
+var L9 = ee.ImageCollection("LANDSAT/LC09/C02/T1_L2");
+
+// 关键改动 1：阈值从 10% 放宽到 60%，配合像元级 QA 掩膜，覆盖会显著提高
+var CLOUD_THRESHOLD = 20;
+var START_DATE = '2017-01-01';
+var END_DATE   = '2025-01-01';
+
+var dataset = L8.merge(L9)
+  .filterDate(START_DATE, END_DATE)
+  .filter(ee.Filter.lt('CLOUD_COVER', CLOUD_THRESHOLD))
+  .map(applyScaleFactors)
+  .map(maskL89sr);
+
+print('Image count (L8+L9):', dataset.size());
+
+// ------------------------------------------------------------------
+// 4. 多年中位合成 + 有效像元计数
+// ------------------------------------------------------------------
+var BAND = 'SR_B7';   // ← 如果实际要 Red，改成 'SR_B4'
+var median = dataset.select(BAND).median().rename(BAND);
+
+// 有效观测计数 —— 用来诊断哪些区域观测稀少
+var validCount = dataset.select(BAND).count().rename('valid_count');
+
+// ------------------------------------------------------------------
+// 5. 第一道空洞填补：邻域中值（focal median）
+// 仅对原始 median 有空洞的像元做局部邻域填充
+// ------------------------------------------------------------------
+var medianFilled = median.unmask(
+  median.focal_median(2, 'circle', 'pixels', 3)
+);
+
+// ------------------------------------------------------------------
+// 6. 导出图像（保留你的 lazy projection 思路，写得很好）
+// ------------------------------------------------------------------
+var export_image = medianFilled.setDefaultProjection({
+  crs: 'EPSG:4326',
+  scale: 30
+}).resample('bilinear').reproject({
+  crs: 'EPSG:4326',
+  scale: 1000
+});
+
+// ------------------------------------------------------------------
+// 7. 网格切片
+// ------------------------------------------------------------------
+function makeGrid(xmin, ymin, xmax, ymax, dx, dy) {
+  var tiles = [];
+  for (var x = xmin; x < xmax; x += dx) {
+    for (var y = ymin; y < ymax; y += dy) {
+      var x2 = Math.min(x + dx, xmax);
+      var y2 = Math.min(y + dy, ymax);
+      var geometry = ee.Geometry.Rectangle([x, y, x2, y2], 'EPSG:4326', false);
+      var name = 'Lon' + (x < 0 ? 'M' + Math.abs(x) : x) +
+                 '_Lat' + (y < 0 ? 'M' + Math.abs(y) : y);
+      tiles.push({ region: geometry, name: name });
+    }
+  }
+  return tiles;
+}
+
+// 关键改动 2：北纬上限从 84 调到 82（Landsat 实际边界 ~82.6°N，再往北也没数据）
+//             南纬下限保持 -56（Landsat 在南纬 60° 以南数据极少）
+var allTiles = makeGrid(-180, -56, 180, 82, 25, 25);
+print('Tasks to Export:', allTiles.length);
+
+allTiles.forEach(function(tile) {
+  Export.image.toDrive({
+    image: export_image,
+    description: 'L89_' + BAND + '_1km_' + tile.name,
+    folder: 'L89_' + BAND + '_1km_Global',
+    fileNamePrefix: 'L89_' + BAND + '_1km_' + tile.name,
+    region: tile.region,
+    scale: 1000,
+    crs: 'EPSG:4326',
+    maxPixels: 1e13,
+    skipEmptyTiles: true
+  });
+});
+

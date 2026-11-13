@@ -1,0 +1,99 @@
+/**
+ * Anthropogenic (Human Activity) Variables Script (Final Clean Version)
+ * * Removed: Anth_Cropland (Categorical data issue resolved by removal)
+ * * Timeframe: 2018-2022
+ * * Resolution: 1km (Bilinear Resampling)
+ * * * Selected Variables:
+ * 1. Anth_HumanMod    -> Human Modification Index (Cumulative Pressure)
+ * 2. Anth_NightLights -> Nighttime Lights (Urbanization Intensity)
+ * 3. Anth_PopDensity  -> Population Density (Direct Pressure)
+ * 4. Anth_TravelTime  -> Accessibility to Cities (Logging/Extraction Cost)
+ */
+
+var startYear = '2018';
+var endYear = '2022';
+var startDate = startYear + '-01-01';
+var endDate = endYear + '-12-31';
+
+var exportRegion = ee.Geometry.BBox(-180, -60, 180, 85); 
+
+// ==============================================================================
+// 1. Human Modification Index (HMI)
+// ==============================================================================
+// Source: Conservation Science Partners (CSP) gHM
+var hmi = ee.Image("CSP/HM/GlobalHumanModification/2016")
+            .select('gHM')
+            .rename('Anth_HumanMod');
+
+// ==============================================================================
+// 2. Nighttime Lights (VIIRS)
+// ==============================================================================
+// Source: NOAA VIIRS Black Marble
+var viirs = ee.ImageCollection("NOAA/VIIRS/DNB/MONTHLY_V1/VCMSLCFG")
+              .filterDate(startDate, endDate)
+              .select('avg_rad')
+              .median()
+              .rename('Anth_NightLights');
+
+// ==============================================================================
+// 3. Population Density
+// ==============================================================================
+// Source: WorldPop
+
+
+// ==============================================================================
+// 4. Accessibility (Travel Time to Cities)
+// ==============================================================================
+// Source: Oxford MAP Accessibility
+// Unit: Minutes
+var access = ee.Image("Oxford/MAP/accessibility_to_cities_2015_v1_0")
+               .select('accessibility')
+               .rename('Anth_TravelTime');
+
+// ==============================================================================
+// 5. Merge and Resample
+// ==============================================================================
+// Combine all 4 anthropogenic variables
+var anthVars = ee.Image.cat([hmi, viirs, access])
+                       .resample('bilinear');
+
+// ==============================================================================
+// 6. Visualization Check
+// ==============================================================================
+Map.setCenter(100, 15, 3); // Center on SE Asia
+
+// Human Modification
+var hmiVis = {min: 0.0, max: 1.0, palette: ['0c0c0c', '071aff', 'ff0000', 'ffca00']};
+Map.addLayer(anthVars.select('Anth_HumanMod'), hmiVis, 'Anth: Human Modification');
+
+// Accessibility (Travel Time)
+var accVis = {min: 0, max: 2000, palette: ['ff0000', 'ff8800', 'ffff00', '00ff00', '0000ff']};
+Map.addLayer(anthVars.select('Anth_TravelTime'), accVis, 'Anth: Travel Time');
+
+// ==============================================================================
+// 7. Export Tasks
+// ==============================================================================
+var bandNames = [
+  'Anth_HumanMod', 
+  'Anth_NightLights', 
+  'Anth_TravelTime'
+];
+
+print('Creating export tasks for 4 Anthropogenic variables...');
+
+bandNames.forEach(function(band) {
+  Export.image.toDrive({
+    image: anthVars.select(band).toFloat(), // Force Float32
+    description: band + '_Global_1km',
+    folder: 'Anthropogenic_Variables_1km',
+    fileNamePrefix: band,
+    region: exportRegion,
+    scale: 1000, 
+    crs: 'EPSG:4326',
+    maxPixels: 1e13,
+    fileFormat: 'GeoTIFF',
+    formatOptions: {
+      cloudOptimized: true
+    }
+  });
+});

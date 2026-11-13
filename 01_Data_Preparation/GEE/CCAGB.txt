@@ -1,0 +1,49 @@
+
+var geometry = ee.Geometry.Rectangle([-179, -60, 179, 80], "EPSG:4326", false);
+
+var agb = ee.ImageCollection("projects/sat-io/open-datasets/ESA/ESA_CCI_AGB");
+
+var rawProjection = agb.first().projection();
+
+var agb2020 = agb.filterDate('2020-01-01', '2021-01-01')
+                 .mosaic()
+                 .select(['AGB'])
+                 .rename('AGB_2020'); 
+
+var targetScale = 1000; 
+var targetCrs = 'EPSG:4326'; 
+
+var agbResampled = agb2020
+    .setDefaultProjection(rawProjection)
+    
+    .resample('bilinear') 
+    
+    .reproject({
+      crs: targetCrs,
+      scale: targetScale
+    })
+    .clip(geometry);
+
+Map.centerObject(geometry, 2);
+var palette = ["#C6ECAE","#A1D490","#7CB970","#57A751","#348E32", 
+               "#267A29","#176520","#0C4E15","#07320D","#031807"];
+var visParams = {min: 1, max: 450, palette: palette};
+
+Map.addLayer(agbResampled, visParams, 'AGB 2020 (1km Bilinear)', true);
+
+// ============================================================
+// 5. Export to Drive
+// ============================================================
+Export.image.toDrive({
+  image: agbResampled.unmask(-9999),
+  description: 'ESA_CCI_AGB_2020_1km_Bilinear_Fixed',
+  folder: 'CCAGB1',
+  region: geometry,
+  scale: targetScale,      
+  crs: targetCrs,         
+  maxPixels: 1e13,         
+  fileFormat: 'GeoTIFF',
+  formatOptions: {
+    cloudOptimized: true
+  }
+});

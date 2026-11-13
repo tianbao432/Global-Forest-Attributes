@@ -1,0 +1,81 @@
+// ==========================================================
+// 1. 修复 ROI (避免奇点坐标错误)
+// ==========================================================
+var roi = ee.Geometry.Rectangle([-179.999, -60, 179.999, 89.999], 'EPSG:4326', false);
+
+// ==========================================================
+// 2. 数据准备 (内存优化策略)
+// ==========================================================
+
+// 加载 GMTED2010 数据 (原始分辨率约为 250m - 1km 取决于纬度)
+var dem2 = ee.Image("USGS/GMTED2010").select('be75');
+
+// [关键修改]：只做重采样(Resample)以平滑数据，严禁在此处 Reproject！
+// 这一步告诉 GEE：如果像素不重叠，请使用双线性插值(比默认的最邻近更平滑)
+// 分辨率的控制完全交给最后的 Export 步骤
+var dem_smooth = dem2.resample('bilinear'); 
+
+// ==========================================================
+// 3. 地形因子计算
+// ==========================================================
+
+// GEE 会自动处理投影问题，在原始投影上计算坡度效率最高
+var terrain = ee.Terrain.products(dem_smooth);
+
+// 提取波段并裁剪 (放在计算之后裁剪更安全)
+// 1. 海拔
+var elevation = dem_smooth.clip(roi).toInt16().rename('Topo_Elevation');
+
+// 2. 坡度
+var slope = terrain.select('slope').clip(roi).toInt16().rename('Topo_Slope');
+
+// 3. 坡向
+var aspect = terrain.select('aspect').clip(roi).toInt16().rename('Topo_Aspect');
+
+// ==========================================================
+// 4. 可视化 (可选)
+// ==========================================================
+Map.centerObject(roi, 2);
+Map.addLayer(elevation, {min: 0, max: 4000, palette: ['000000', 'white']}, 'Elevation');
+
+// ==========================================================
+// 5. 导出任务 (Export)
+// ==========================================================
+// 这里指定 scale: 1000，GEE 会在导出的一瞬间完成重投影和重采样，
+// 不会占用计算过程中的内存。
+
+// 导出 1: 海拔
+Export.image.toDrive({
+  image: elevation,
+  description: 'Topo_Elevation_1km_Global',
+  folder: 'DEM',
+  region: roi,
+  scale: 1000,           // 核心：在这里定义 1000米
+  crs: 'EPSG:4326',
+  fileFormat: 'GeoTIFF',
+  maxPixels: 1e13
+});
+
+// 导出 2: 坡度
+Export.image.toDrive({
+  image: slope,
+  description: 'Topo_Slope_1km_Global',
+  folder: 'slope',
+  region: roi,
+  scale: 1000,
+  crs: 'EPSG:4326',
+  fileFormat: 'GeoTIFF',
+  maxPixels: 1e13
+});
+
+// 导出 3: 坡向
+Export.image.toDrive({
+  image: aspect,
+  description: 'Topo_Aspect_1km_Global',
+  folder: 'aspect',
+  region: roi,
+  scale: 1000,
+  crs: 'EPSG:4326',
+  fileFormat: 'GeoTIFF',
+  maxPixels: 1e13
+});

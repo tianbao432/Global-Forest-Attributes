@@ -1,0 +1,85 @@
+// ==============================================================================
+// Global Leaf Traits 1km 数据加载与全尺度导出管线
+// ==============================================================================
+
+// 1. 定义全球有效植被边界 (剔除深南极洲，大幅节省计算资源和存储空间)
+var globalBounds = ee.Geometry.Polygon(
+  [[[-180.0, -60.0],
+    [180.0, -60.0],
+    [180.0, 85.0],
+    [-180.0, 85.0]]], null, false
+);
+
+// 2. 加载数据并重命名波段
+// SLA (mm2/g)
+var SLA = ee.Image('projects/sat-io/open-datasets/GLOBAL-LEAF-TRAITS/SLA_1km_v3').select([0],['SLA']);
+// LNC (mg/g)
+var LNC = ee.Image('projects/sat-io/open-datasets/GLOBAL-LEAF-TRAITS/LNC_1km_v3').select([0],['LNC']);
+// LPC (mg/g)
+var LPC = ee.Image('projects/sat-io/open-datasets/GLOBAL-LEAF-TRAITS/LPC_1km_v3').select([0],['LPC']);
+// Leaf dry matter content LDMC (g/g)
+var LDMC = ee.Image('projects/sat-io/open-datasets/GLOBAL-LEAF-TRAITS/LDMC_1km_v3').select([0],['LDMC']);
+
+// 3. 掩膜无效数据 (原数据中 > 0 的区域代表自然植被区)
+SLA = SLA.mask(SLA.gt(0));
+LNC = LNC.mask(LNC.gt(0));
+LPC = LPC.mask(LPC.gt(0));
+LDMC = LDMC.mask(LDMC.gt(0));
+
+// 4. 可视化检查 (仅在屏幕当前视图加载，不影响导出)
+var vis_vi = {min:7, max: 22, palette: ["ffffd9", "edf8b1", "c7e9b4", "7fcdbb", "41b6c4", "1d91c0", "225ea8", "253494", "081d58"]};
+Map.centerObject(ee.Geometry.Point([20, 0]), 3);
+Map.addLayer(SLA, vis_vi, 'SLA (mm2 / g)', true);
+
+// ==============================================================================
+// 5. 核心导出任务设定 (输出至 Google Drive)
+// ==============================================================================
+
+// 统一的导出参数配置
+var exportScale = 1000;         // 1km = 1000m
+var exportFolder = 'Global_Forest_Traits'; // 你 Google Drive 中的目标文件夹名
+var maxPx = 1e13;               // 必须使用科学计数法设置极大值，打破默认 1e8 的限制
+
+// 导出 SLA
+Export.image.toDrive({
+  image: SLA,
+  description: 'Trait_SLA_1km',
+  folder: exportFolder,
+  region: globalBounds,
+  scale: exportScale,
+  crs: 'EPSG:4326',             // 标准 WGS84 经纬度投影
+  maxPixels: maxPx
+});
+
+// 导出 LNC (叶氮含量)
+Export.image.toDrive({
+  image: LNC,
+  description: 'Trait_LNC_1km',
+  folder: exportFolder,
+  region: globalBounds,
+  scale: exportScale,
+  crs: 'EPSG:4326',
+  maxPixels: maxPx
+});
+
+// 导出 LPC (叶磷含量)
+Export.image.toDrive({
+  image: LPC,
+  description: 'Trait_LPC_1km',
+  folder: exportFolder,
+  region: globalBounds,
+  scale: exportScale,
+  crs: 'EPSG:4326',
+  maxPixels: maxPx
+});
+
+// 导出 LDMC (叶片干物质含量)
+Export.image.toDrive({
+  image: LDMC,
+  description: 'Trait_LDMC_1km',
+  folder: exportFolder,
+  region: globalBounds,
+  scale: exportScale,
+  crs: 'EPSG:4326',
+  maxPixels: maxPx
+});

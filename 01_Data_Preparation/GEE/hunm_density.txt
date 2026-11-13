@@ -1,0 +1,61 @@
+// =============================================================================
+// WorldPop GP/100m/pop 2020 -> Global 1 km (EPSG:4326)
+// Bilinear resampling (smooth surface)
+// =============================================================================
+
+// ---------- 1. Region ----------
+var world = ee.Geometry.Rectangle([-180, -60, 180, 84], null, false);
+
+// ---------- 2. Load WorldPop ----------
+var dataset = ee.ImageCollection('WorldPop/GP/100m/pop')
+    .filterDate('2020-01-01', '2020-12-31')
+    .select('population');
+
+// 【关键修改 1】获取原始影像的投影信息（原生分辨率约 100m）
+var originalProj = dataset.first().projection();
+
+// 拼接影像（此时会丢失原生投影信息）
+var popOriginal = dataset
+    .mosaic()
+    .rename('Anth_Pop');
+
+// ---------- 3. Bilinear resampling to 1km ----------
+// 【关键修改 2】先赋予正确的原生投影，然后再进行双线性重采样和强制重投影到 1km
+var popBilinear = popOriginal
+    .setDefaultProjection(originalProj) // 告诉 GEE 现在的底图是 100m 像元
+    .resample('bilinear')               // 开启双线性插值
+    .reproject({                        // 强制在 1km 的尺度上执行重采样
+        crs: 'EPSG:4326',
+        scale: 1000
+    });
+
+// ---------- 4. Visualization ----------
+var popVis = {
+  min: 0,
+  max: 50,
+  palette: ['white', 'yellow', 'orange', 'red', 'darkred']
+};
+
+Map.centerObject(ee.Geometry.Point([116.4, 39.9]), 4);
+// 在地图上直接加载重采样后的 1km 结果以便预览
+Map.addLayer(popBilinear.clip(world), popVis, 'WorldPop 1km Bilinear');
+
+// ---------- 5. Export ----------
+Export.image.toDrive({
+  image: popBilinear.unmask(0).clip(world),
+
+  description: 'WorldPop_2020_1km_bilinear_FIXEDAAAA',
+  fileNamePrefix: 'WorldPop_2020_1km_bilinear_FIXEDAAA',
+  folder: 'GEE_Output',
+
+  region: world,
+
+  crs: 'EPSG:4326',
+  scale: 1000,   // 1 km
+
+  maxPixels: 1e13,
+  fileFormat: 'GeoTIFF',
+  formatOptions: {
+    cloudOptimized: true
+  }
+});

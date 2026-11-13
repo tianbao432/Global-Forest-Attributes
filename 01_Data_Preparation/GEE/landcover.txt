@@ -1,0 +1,194 @@
+
+// -----------------------------------------------------------------------------
+// Dataset 1: Copernicus Global Land Cover (CGLS-LC100, 2019, 100 m)
+// -----------------------------------------------------------------------------
+var cglc = ee.Image('COPERNICUS/Landcover/100m/Proba-V-C3/Global/2019')
+             .select('discrete_classification');
+var Forests1 = cglc.gte(111).and(cglc.lte(126)).rename('forest').toUint8();
+
+// -----------------------------------------------------------------------------
+// Dataset 2: MODIS LC_Type1 IGBP (MCD12Q1.061, 2019, 500 m)
+// -----------------------------------------------------------------------------
+var modisLC = ee.ImageCollection('MODIS/061/MCD12Q1')
+                .filterDate('2019-01-01', '2019-12-31')
+                .first()
+                .select('LC_Type1');
+var Forests2 = modisLC.gte(1).and(modisLC.lte(5)).rename('forest').toUint8();
+
+// -----------------------------------------------------------------------------
+// Dataset 3: ESRI Global LULC 2020 (10 m, mosaic)
+// -----------------------------------------------------------------------------
+var Forests3 = ee.ImageCollection('projects/sat-io/open-datasets/landcover/ESRI_Global-LULC_10m')
+                 .mosaic()
+                 .eq(2)
+                 .rename('forest').toUint8()
+                 .setDefaultProjection('EPSG:4326', null, 10);
+
+// -----------------------------------------------------------------------------
+// Dataset 4: ESA WorldCover 2020 v100 (10 m)
+// -----------------------------------------------------------------------------
+var Forests4 = ee.ImageCollection('ESA/WorldCover/v100')
+                 .first().select('Map').eq(10).rename('forest').toUint8();
+
+// -----------------------------------------------------------------------------
+// Dataset 5: ESA WorldCover 2021 v200 (10 m)
+// -----------------------------------------------------------------------------
+var Forests5 = ee.ImageCollection('ESA/WorldCover/v200')
+                 .first().select('Map').eq(10).rename('forest').toUint8();
+
+// -----------------------------------------------------------------------------
+// Dataset 6: ALOS/PALSAR FNF4 (2018, 25 m)
+// 1 = Forest, 2 = Non-Forest, 3 = Water. Using eq(1) for Forest.
+// -----------------------------------------------------------------------------
+var Forests6 = ee.ImageCollection('JAXA/ALOS/PALSAR/YEARLY/FNF4')
+                 .filterDate('2018-01-01', '2018-12-31')
+                 .first().select('fnf')
+                 .eq(1).rename('forest').toUint8();
+
+// -----------------------------------------------------------------------------
+// Dataset 7: GLOBMAP FTC 2020 (1 km)
+// -----------------------------------------------------------------------------
+var Forests7 = ee.Image('projects/ee-864741436/assets/GLOBMAPFTC2020_wgs84_1km')
+                 .gte(10).rename('forest').toUint8();
+
+// -----------------------------------------------------------------------------
+// Dataset 8: MODIS MOD44B VCF (2020, 250 m)
+// -----------------------------------------------------------------------------
+var Forests8 = ee.ImageCollection('MODIS/061/MOD44B')
+                 .filterDate('2020-01-01', '2020-12-31')
+                 .first().select('Percent_Tree_Cover')
+                 .gte(10).rename('forest').toUint8();
+
+// -----------------------------------------------------------------------------
+// Dataset 9: Dynamic World V1 (2020 Median, 10 m)
+// -----------------------------------------------------------------------------
+var Forests9 = ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
+                 .filterDate('2020-01-01', '2020-12-31')
+                 .select('trees')
+                 .median()
+                 .gte(0.4).rename('forest').toUint8()
+                 .setDefaultProjection('EPSG:4326', null, 10);
+
+// -----------------------------------------------------------------------------
+// Dataset 10: GLC_FCS30D Annual (30 m)
+// -----------------------------------------------------------------------------
+var glc_fcs = ee.ImageCollection('projects/sat-io/open-datasets/GLC-FCS30D/annual')
+                .mosaic().select('b21')
+                .setDefaultProjection('EPSG:4326', null, 30);
+var Forests10 = glc_fcs.eq(51)
+                  .or(glc_fcs.eq(52)).or(glc_fcs.eq(61)).or(glc_fcs.eq(62))
+                  .or(glc_fcs.eq(71)).or(glc_fcs.eq(72)).or(glc_fcs.eq(81))
+                  .or(glc_fcs.eq(82)).or(glc_fcs.eq(91)).or(glc_fcs.eq(92))
+                  .rename('forest').toUint8();
+
+// -----------------------------------------------------------------------------
+// Dataset 11: EC JRC Global Forest Cover 2020, V2 (10 m, EUDR)
+// -----------------------------------------------------------------------------
+var Forests11 = ee.ImageCollection('JRC/GFC2020/V2').mosaic()
+                  .select('Map').eq(1).rename('forest').toUint8()
+                  .setDefaultProjection('EPSG:4326', null, 10);
+
+// -----------------------------------------------------------------------------
+// Dataset 12: EC JRC Global Forest Cover 2020, V3 (10 m, latest)
+// -----------------------------------------------------------------------------
+var Forests12 = ee.Image('JRC/GFC2020/V3').select('Map')
+                  .eq(1).rename('forest').toUint8();
+
+// -----------------------------------------------------------------------------
+// Dataset 13: EC JRC Global Forest Types 2020 subtypes V1 (10 m)
+// -----------------------------------------------------------------------------
+var jrc_types = ee.Image('JRC/GFC2020_subtypes/V1');
+var Forests13 = jrc_types.eq(1).or(jrc_types.eq(10)).or(jrc_types.eq(20))
+                  .rename('forest').toUint8();
+
+// -----------------------------------------------------------------------------
+// Dataset 14: Global Natural & Planted Forests 2021 (Xiao et al., 30 m)
+// -----------------------------------------------------------------------------
+var gnpf = ee.ImageCollection('projects/sat-io/open-datasets/GLOBAL-NATURAL-PLANTED-FORESTS')
+             .mosaic()
+             .setDefaultProjection('EPSG:4326', null, 30);
+var Forests14 = gnpf.select('b1').neq(127)
+                  .or(gnpf.select('b2').neq(127))
+                  .or(gnpf.select('b3').neq(127))
+                  .rename('forest').toUint8();
+
+// =============================================================================
+// =============================================================================
+var forestLayers = [
+  Forests1,  Forests2,  Forests3,  Forests4,  Forests5,
+  Forests6,  Forests7,  Forests8,  Forests9,  Forests10,
+  Forests11, Forests12, Forests13, Forests14
+];
+
+var CONSENSUS_RATIO = 0.6;   //
+var MIN_VALID_LAYERS = 4;    // 
+
+print('forestLayers:', forestLayers.length);
+print('CONSENSUS_RATIO:', CONSENSUS_RATIO);
+print('MIN_VALID_LAYERS:', MIN_VALID_LAYERS);
+
+var stack = ee.ImageCollection(forestLayers);
+
+var sumForests = stack.sum().toUint8().setDefaultProjection('EPSG:4326', null, 1000);
+
+var validCount = stack.count().toUint8().setDefaultProjection('EPSG:4326', null, 1000);
+
+var agreementRatio = sumForests.divide(validCount);
+
+
+var authoritative_forest = agreementRatio.gte(CONSENSUS_RATIO)  
+                                     .and(validCount.gte(MIN_VALID_LAYERS))
+                                     .selfMask() 
+                                     .toUint8()
+                                     .rename('forest')
+                                     .setDefaultProjection('EPSG:4326', null, 1000);
+
+var numTiles  = 12;
+var tileWidth = 360 / numTiles;
+var lonStart  = -180;
+var latMin    = -60;
+var latMax    = 85;
+
+var tiles = [];
+for (var j = 0; j < numTiles; j++) {
+  var west = lonStart + j * tileWidth;
+  var east = west + tileWidth;
+  tiles.push({
+    name: 'tile' + (j + 1) + '_lon' + west + '_to_' + east,
+    geom: ee.Geometry.Rectangle([west, latMin, east, latMax], null, false)
+  });
+}
+
+for (var k = 0; k < tiles.length; k++) {
+  var t = tiles[k];
+
+  Export.image.toDrive({
+    image:          authoritative_forest,
+    description:    'Authoritative_Forest_' + t.name,
+    folder:         'forest_cover',
+    fileNamePrefix: 'Authoritative_Forest_' + t.name,
+    region:         t.geom,
+    scale:          1000,
+    crs:            'EPSG:4326',
+    maxPixels:      1e13,
+    fileFormat:     'GeoTIFF',
+    formatOptions:  {cloudOptimized: true}
+  });
+}
+
+for (var m = 0; m < tiles.length; m++) {
+  var tt = tiles[m];
+
+  Export.image.toDrive({
+    image:          sumForests,
+    description:    'Forest_AgreementCount_' + tt.name,
+    folder:         'forest_cover',
+    fileNamePrefix: 'Forest_AgreementCount_' + tt.name,
+    region:         tt.geom,
+    scale:          1000,
+    crs:            'EPSG:4326',
+    maxPixels:      1e13,
+    fileFormat:     'GeoTIFF',
+    formatOptions:  {cloudOptimized: true}
+  });
+}

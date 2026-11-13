@@ -1,0 +1,118 @@
+/**
+ * SoilGrids Extended Variables Download Script (0-30cm Simple Mean)
+ * * Added Variables:
+ * 1. Nitrogen (Soil_Nitrogen)
+ * 2. Cation Exchange Capacity (Soil_CEC)
+ * 3. Coarse Fragments/Gravel (Soil_CFVO)
+ * 4. Silt Content (Soil_Silt)
+ * * Strategy: Simple Mean of 0-5, 5-15, 15-30cm layers.
+ */
+
+// ==============================================================================
+// 1. Define Function: Simple Mean of Top 3 Layers
+// ==============================================================================
+var getSimpleMean0_30cm = function(assetId, bandPrefix, scaleFactor, outName) {
+  var img = ee.Image(assetId);
+  
+  // Select the top 3 depth layers
+  var bands = img.select([
+    bandPrefix + '_0-5cm_mean',
+    bandPrefix + '_5-15cm_mean',
+    bandPrefix + '_15-30cm_mean'
+  ]);
+  
+  // Calculate simple mean: (L1 + L2 + L3) / 3
+  return bands.reduce(ee.Reducer.mean())
+              .multiply(scaleFactor)
+              .rename(outName);
+};
+
+// ==============================================================================
+// 2. Extract Extended Soil Variables
+// ==============================================================================
+
+// --- NEW ADDITIONS ---
+
+// 1. Nitrogen (Total Nitrogen)
+// Source unit: cg/kg -> Scale 0.01 -> Target unit: g/kg
+var nitrogen = getSimpleMean0_30cm(
+  "projects/soilgrids-isric/nitrogen_mean", 
+  "nitrogen", 
+  0.01, 
+  "Soil_Nitrogen"
+);
+
+// 2. Cation Exchange Capacity (CEC) at ph 7
+// Source unit: mmol(c)/kg -> Scale 0.1 -> Target unit: cmol(c)/kg
+var cec = getSimpleMean0_30cm(
+  "projects/soilgrids-isric/cec_mean", 
+  "cec", 
+  0.1, 
+  "Soil_CEC"
+);
+
+// 3. Coarse Fragments Volumetric (Gravel/Rocks)
+// Source unit: cm3/dm3 (vol permille) -> Scale 0.1 -> Target unit: Vol %
+var cfvo = getSimpleMean0_30cm(
+  "projects/soilgrids-isric/cfvo_mean", 
+  "cfvo", 
+  0.1, 
+  "Soil_CFVO"
+);
+
+// 4. Silt Content (Completes the texture triangle)
+// Source unit: g/kg -> Scale 0.1 -> Target unit: %
+var silt = getSimpleMean0_30cm(
+  "projects/soilgrids-isric/silt_mean", 
+  "silt", 
+  0.1, 
+  "Soil_Silt"
+);
+
+// --- PREVIOUS VARIABLES ---
+
+var clay = getSimpleMean0_30cm("projects/soilgrids-isric/clay_mean", "clay", 0.1, "Soil_Clay");
+var sand = getSimpleMean0_30cm("projects/soilgrids-isric/sand_mean", "sand", 0.1, "Soil_Sand");
+var bd = getSimpleMean0_30cm("projects/soilgrids-isric/bdod_mean", "bdod", 0.01, "Soil_BulkDensity");
+var soc = getSimpleMean0_30cm("projects/soilgrids-isric/soc_mean", "soc", 0.1, "Soil_SOC");
+var ph = getSimpleMean0_30cm("projects/soilgrids-isric/phh2o_mean", "phh2o", 0.1, "Soil_pH");
+
+// ==============================================================================
+// 3. Merge and Resample
+// ==============================================================================
+var soilVars = ee.Image.cat([
+  clay, sand, silt,      // Texture
+  bd, cfvo,              // Physical Structure
+  soc, ph, nitrogen, cec // Chemical Properties
+]).resample('bilinear');
+
+// ==============================================================================
+// 4. Export Tasks
+// ==============================================================================
+var exportRegion = ee.Geometry.BBox(-180, -60, 180, 85); 
+
+// Full list of 9 variables
+var bandNames = [
+  'Soil_Clay', 'Soil_Sand', 'Soil_Silt', 
+  'Soil_BulkDensity', 'Soil_CFVO',
+  'Soil_SOC', 'Soil_pH', 'Soil_Nitrogen', 'Soil_CEC'
+];
+
+print('Creating export tasks for 9 SoilGrids variables...');
+
+bandNames.forEach(function(band) {
+  Export.image.toDrive({
+    image: soilVars.select(band).toFloat(),
+    description: band + '_Global_1km_SimpleMean',
+    folder: 'SoilGrids_Variables_1km',
+    fileNamePrefix: band,
+    region: exportRegion,
+    scale: 1000, 
+    crs: 'EPSG:4326',
+    maxPixels: 1e13,
+    fileFormat: 'GeoTIFF',
+    formatOptions: {
+      cloudOptimized: true
+    }
+  });
+});

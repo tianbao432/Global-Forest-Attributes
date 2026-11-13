@@ -1,0 +1,64 @@
+// ==============================================================================
+// Global Fire Frequency (2010-2023)
+// Fix: Convert NA to 0 via unmask(0) + Bilinear Resampling + 1km Alignment
+// ==============================================================================
+
+var startYear = 2003;
+var endYear   = 2023;
+
+var region = ee.Geometry.Rectangle([-180, -60, 180, 85], null, false);
+
+var cell_size = 1/120;
+var transform_1km = [cell_size, 0, -180, 0, -cell_size, 90];
+
+var modisCol = ee.ImageCollection('MODIS/061/MCD64A1').select('BurnDate');
+var modisProj = modisCol.first().projection();
+
+var yearlyBurn = ee.ImageCollection(
+  ee.List.sequence(startYear, endYear).map(function(year) {
+    var start = ee.Date.fromYMD(year, 1, 1);
+    var end   = start.advance(1, 'year');
+    
+    var yearly = modisCol
+      .filterDate(start, end)
+      .map(function(img) {
+        return img.gt(0); 
+      })
+      .max()
+      .set('year', year);
+      
+    return yearly;
+  })
+);
+
+var totalYears = endYear - startYear + 1;
+var fireCount = yearlyBurn.sum();
+
+// CORE FIX: Apply unmask(0) to ensure NOData/NA becomes 0 before resampling
+var fireFrequency = fireCount.divide(totalYears)
+  .unmask(0)
+  .rename('Fire_Frequency');
+
+// Fix spatial resolution distortion during bilinear resampling
+var fireFrequency_1km = fireFrequency
+  .setDefaultProjection(modisProj) 
+  .resample('bilinear');
+
+var visParams = {
+  min: 0,
+  max: 0.5, 
+  palette: ['#ffffff', '#fff7bc', '#fee391', '#fec44f', '#fe9929', '#ec7014', '#cc4c02', '#8c2d04']
+};
+
+Map.setCenter(108.5, 33.5, 5);
+Map.addLayer(fireFrequency_1km.clip(region), visParams, 'Fire Frequency 1km');
+
+Export.image.toDrive({
+  image: fireFrequency_1km.clip(region),
+  description: 'Fire_Frequency_1km_2003_2023',
+  folder: 'Global_Forest_Disturbance',
+  crs: 'EPSG:4326',
+  crsTransform: transform_1km, 
+  region: region,
+  maxPixels: 1e13
+});

@@ -1,0 +1,90 @@
+// ==============================================================================
+// 全球微波 L 波段 (ALOS PALSAR-2) 独立导出管线
+// (2015-2023均值 -> DN转dB物理量 -> 无覆盖设0 -> 1km 双线性)
+// ==============================================================================
+
+var startDate = '2015-01-01';
+var endDate = '2024-01-01'; 
+
+// ==============================================================================
+// 1. 加载 JAXA 全球年度镶嵌产品 (原生分辨率 25m)
+// ==============================================================================
+// 这个数据集包含 ALOS-2 (2015 至今) 的年度完美拼接
+var alosCol = ee.ImageCollection("JAXA/ALOS/PALSAR/YEARLY/SAR")
+                .filterDate(startDate, endDate);
+
+var originalProj = alosCol.first().select('HH').projection();
+
+// ==============================================================================
+// 2. 核心科学计算：DN 值转换为 Gamma0 后向散射系数 (dB)
+// ==============================================================================
+var convertToDB = function(image) {
+  // 提取原始 DN 值波段
+  var hh_dn = image.select('HH');
+  var hv_dn = image.select('HV');
+  
+  // 掩除无效值 (DN=0)
+  var mask = hh_dn.gt(0).and(hv_dn.gt(0));
+  
+  // 物理公式转换：10 * log10(DN^2) - 83.0
+  var hh_db = hh_dn.pow(2).log10().multiply(10).subtract(83.0).rename('HH_dB');
+  var hv_db = hv_dn.pow(2).log10().multiply(10).subtract(83.0).rename('HV_dB');
+  
+  // 计算微波极化比率 (极化比对森林含水量和结构也非常敏感)
+  var ratio = hh_db.subtract(hv_db).rename('HH_minus_HV_dB');
+  
+  return ee.Image([hh_db, hv_db, ratio]).updateMask(mask);
+};
+
+// 执行物理转换并求多年均值
+var alos_mean_db = alosCol.map(convertToDB).mean();
+
+// ==============================================================================
+// 3. 统一处理：解掩膜赋 0 & 1km 重采样
+// ==============================================================================
+var processFinal = function(image) {
+  // L波段极化值通常在 -30 到 0 之间，没有树的地方也可以用 0 填充作为机器学习的基准背景
+  return image.unmask(0) 
+              .setDefaultProjection(originalProj)
+              .resample('bilinear'); 
+};
+
+var final_alos = processFinal(alos_mean_db);
+
+// ==============================================================================
+// 4. 独立波段导出设置 (完美对齐 30 arc-seconds)
+// ==============================================================================
+var cell_size = 1/120; 
+var transform_1km = [cell_size, 0, -180, 0, -cell_size, 90]; 
+var region = ee.Geometry.Rectangle([-180, -60, 180, 85], null, false);
+var export_folder = 'Global_Vegetation_Traits';
+
+// 待导出的核心雷达特征
+var bandNames = ['HH_dB', 'HV_dB', 'HH_minus_HV_dB'];
+
+bandNames.forEach(function(name) {
+  Export.image.toDrive({
+    image: final_alos.select(name),
+    description: 'Global_ALOS_' + name + '_1km_Mean_2015_2023',
+    folder: export_folder,
+    crs: 'EPSG:4326',
+    crsTransform: transform_1km,
+    region: region,
+    maxPixels: 1e13
+  });
+});
+
+// ==============================================================================
+// 5. 可视化检查 (绝美的雷达假彩色)
+// ==============================================================================
+Map.setCenter(108.5, 33.5, 4); 
+
+// 经典的 RGB 组合显示森林结构：
+// Red: HH (双星散射，对树干敏感)
+// Green: HV (体散射，对树冠枝桠敏感)
+// Blue: HH/HV 比值
+Map.addLayer(final_alos, {
+  bands: ['HH_dB', 'HV_dB', 'HH_minus_HV_dB'],
+  min: [-20, -25, 0],
+  max: [0, -5, 15]
+}, 'ALOS-2 Forest Structure (RGB: HH, HV, Ratio)');

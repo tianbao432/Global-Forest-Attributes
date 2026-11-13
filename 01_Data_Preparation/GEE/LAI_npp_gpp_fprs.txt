@@ -1,0 +1,117 @@
+// ==============================================================================
+// 全球植被关键参数 (LAI, FPAR, GPP, NPP) 独立导出管线
+// (MODIS -> 2015-2023均值 -> 无覆盖区域设为0 -> 1km 双线性重采样)
+// ==============================================================================
+
+// 1. 选取目标时间范围 (2015-2023)
+var startDate = '2015-01-01';
+var endDate = '2024-01-01'; 
+
+// ==============================================================================
+// 2. 加载数据源
+// ==============================================================================
+var laiFparCol = ee.ImageCollection("MODIS/061/MCD15A3H").filterDate(startDate, endDate);
+var gppCol = ee.ImageCollection("MODIS/061/MOD17A2HGF").filterDate(startDate, endDate);
+var nppCol = ee.ImageCollection("MODIS/061/MOD17A3HGF").filterDate(startDate, endDate);
+
+// 提取原始投影用于重采样锚定
+var originalProj = laiFparCol.first().projection();
+
+// ==============================================================================
+// 3. 数据处理函数
+// ==============================================================================
+
+// 3.1 处理 LAI 和 FPAR (均值)
+var mean_lai_fpar = laiFparCol.map(function(img) {
+  var lai = img.select('Lai').lte(100);
+  var fpar = img.select('Fpar').lte(100);
+  return img.updateMask(lai.and(fpar))
+            .select(['Lai', 'Fpar'])
+            .multiply(ee.Image([0.1, 0.01]))
+            .rename(['LAI', 'FPAR']);
+}).mean();
+
+// 3.2 处理 GPP (科学计算逻辑：先求每年总和，再求多年均值)
+var years = ee.List.sequence(2015, 2023);
+var annual_gpp_col = ee.ImageCollection.fromImages(years.map(function(y) {
+  var yearly_gpp = gppCol.filter(ee.Filter.calendarRange(y, y, 'year'))
+                         .map(function(img) {
+                           return img.updateMask(img.select('Gpp').lte(30000))
+                                     .select('Gpp')
+                                     .multiply(0.0001); // 缩放后单位为 kg C/m^2/8-day
+                         })
+                         .sum(); // 累加得到年总 GPP (kg C/m^2/yr)
+  return yearly_gpp.set('year', y);
+}));
+var mean_gpp = annual_gpp_col.mean().rename('GPP');
+
+// 3.3 处理 NPP (年度数据直接求均值)
+var mean_npp = nppCol.map(function(img) {
+  return img.updateMask(img.select('Npp').lte(65500))
+            .select('Npp')
+            .multiply(0.0001) // 缩放后单位为 kg C/m^2/yr
+            .rename('NPP');
+}).mean();
+
+
+// ==============================================================================
+// 4. 统一处理：解掩膜赋0 & 重采样
+// ==============================================================================
+
+var processFinal = function(image) {
+  // unmask(0) 将所有原本没有数据的地方（包括海洋和被筛除的异常值）填充为 0
+  return image.unmask(0)
+              .setDefaultProjection(originalProj)
+              .resample('bilinear'); 
+};
+
+var final_lai = processFinal(mean_lai_fpar.select('LAI'));
+var final_fpar = processFinal(mean_lai_fpar.select('FPAR'));
+var final_gpp = processFinal(mean_gpp);
+var final_npp = processFinal(mean_npp);
+
+
+// ==============================================================================
+// 5. 导出设置 (WorldClim 1km 标准)
+// ==============================================================================
+
+var cell_size = 1/120; // 30 arc-seconds
+var transform_1km = [cell_size, 0, -180, 0, -cell_size, 90]; 
+var region = ee.Geometry.Rectangle([-180, -60, 180, 85], null, false);
+var export_folder = 'Global_Vegetation_Traits';
+
+// 定义导出函数简化操作
+var exportImage = function(image, name) {
+  Export.image.toDrive({
+    image: image,
+    description: name + '_1km_Mean_2015_2023_Unmasked0',
+    folder: export_folder,
+    crs: 'EPSG:4326',
+    crsTransform: transform_1km,
+    region: region,
+    maxPixels: 1e13
+  });
+};
+
+// 执行四个独立的导出任务
+exportImage(final_lai, 'Global_LAI');
+exportImage(final_fpar, 'Global_FPAR');
+exportImage(final_gpp, 'Global_GPP');
+exportImage(final_npp, 'Global_NPP');
+
+
+// ==============================================================================
+// 6. 可视化检查 (添加在地图上)
+// ==============================================================================
+Map.setCenter(108.5, 33.5, 4); // 默认居中中国区域方便检查
+
+// 定义调色板 (因为0覆盖了广阔的海洋和无植被区，第一个颜色必须是明显的背景色，如深蓝色或黑色)
+var palette_lai = ['#051c2c', '#f7fcf5', '#e5f5e0', '#c7e9c0', '#a1d99b', '#74c476', '#41ab5d', '#238b45', '#006d2c', '#00441b'];
+var palette_fpar = ['#051c2c', '#ffffe5', '#f7fcb9', '#d9f0a3', '#addd8e', '#78c679', '#41ab5d', '#238443', '#006837', '#004529'];
+var palette_carbon = ['#051c2c', '#fff5eb', '#fee6ce', '#fdd0a2', '#fdae6b', '#fd8d3c', '#f16913', '#d94801', '#a63603', '#7f2704'];
+
+// 添加图层：0值显示为深蓝色(#051c2c)，其他数值正常渲染渐变色
+Map.addLayer(final_lai, {min: 0, max: 6, palette: palette_lai}, 'Global LAI (0-6)');
+Map.addLayer(final_fpar, {min: 0, max: 0.9, palette: palette_fpar}, 'Global FPAR (0-0.9)');
+Map.addLayer(final_gpp, {min: 0, max: 3.5, palette: palette_carbon}, 'Global GPP (0-3.5 kg C/m2)');
+Map.addLayer(final_npp, {min: 0, max: 2.0, palette: palette_carbon}, 'Global NPP (0-2.0 kg C/m2)');

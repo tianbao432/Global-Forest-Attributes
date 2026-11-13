@@ -1,0 +1,78 @@
+/**
+ * WorldClim Bioclimatic Variables (Bio1-Bio19) Download Script
+ * Settings:
+ * 1. Variable Names: Keep original names (bio01, bio02...)
+ * 2. Scale Factors: Applied based on metadata (Temp * 0.1, Bio04 * 0.01)
+ * 3. Resolution: Export at 1km (scale: 1000) with bilinear resampling
+ */
+
+// ==============================================================================
+// 1. Load WorldClim V1 BIO Dataset
+// ==============================================================================
+var bio = ee.Image("WORLDCLIM/V1/BIO");
+
+// ==============================================================================
+// 2. Data Pre-processing: Apply Scale Factors
+// ==============================================================================
+// According to the provided table:
+// bio01, bio02, bio05-bio11: Scale 0.1 (Units become °C)
+// bio04: Scale 0.01 (Temperature Seasonality)
+// bio03, bio12-bio19: Scale 1 (No change, keep as is)
+
+// A. Temperature bands requiring * 0.1 scaling
+var tempBands01 = bio.select(['bio01', 'bio02', 'bio05', 'bio06', 'bio07', 'bio08', 'bio09', 'bio10', 'bio11'])
+                     .multiply(0.1);
+
+// B. Temperature Seasonality band requiring * 0.01 scaling (bio04)
+var tempBand04 = bio.select(['bio04'])
+                    .multiply(0.01);
+
+// C. Bands requiring no scaling (bio03 Isothermality and Precipitation bands)
+var rawBands = bio.select(['bio03', 'bio12', 'bio13', 'bio14', 'bio15', 'bio16', 'bio17', 'bio18', 'bio19']);
+
+// D. Concatenate all bands and apply bilinear resampling
+// This ensures smooth transitions when exporting native 927m data to 1000m grid
+var bioFinal = ee.Image.cat([
+  tempBands01,
+  tempBand04, 
+  rawBands
+]).resample('bilinear'); 
+
+// ==============================================================================
+// 3. Visualization Check (Optional)
+// ==============================================================================
+Map.setCenter(110, 30, 4);
+
+// Check bio01 (Mean Annual Temperature)
+var visParams = {min: -10, max: 30, palette: ['blue', 'purple', 'cyan', 'green', 'yellow', 'red']};
+Map.addLayer(bioFinal.select('bio01'), visParams, 'Bio01 (MAT)');
+
+// ==============================================================================
+// 4. Export Tasks
+// ==============================================================================
+var exportRegion = ee.Geometry.BBox(-180, -60, 180, 85); 
+
+// Define list of band names to export
+var bandNames = [
+  'bio01', 'bio02', 'bio03', 'bio04', 'bio05', 'bio06', 'bio07', 'bio08', 'bio09', 'bio10', 
+  'bio11', 'bio12', 'bio13', 'bio14', 'bio15', 'bio16', 'bio17', 'bio18', 'bio19'
+];
+
+print('Creating export tasks...');
+
+bandNames.forEach(function(band) {
+  Export.image.toDrive({
+    image: bioFinal.select(band).toFloat(), // Force conversion to Float to retain decimal precision
+    description: band + '_Global',      // Example filename: bio01_Global_1km.tif
+    folder: 'WorldClim_Bio_Original',       // Folder name in Google Drive
+    fileNamePrefix: band,
+    region: exportRegion,
+    scale: 1000,                            // Set to 1000m
+    crs: 'EPSG:4326',
+    maxPixels: 1e13,
+    fileFormat: 'GeoTIFF',
+    formatOptions: {
+      cloudOptimized: true
+    }
+  });
+});

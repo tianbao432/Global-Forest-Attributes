@@ -1,0 +1,114 @@
+var START_DATE = '2015-01-01';
+var END_DATE   = '2023-12-31';
+var START_DOY = 91;
+var END_DOY   = 304;
+
+var world = ee.Geometry.Rectangle([-180, -89.9, 180, 89.9], null, false);
+
+var modis = ee.ImageCollection('MODIS/061/MOD13Q1')
+  .filterDate(START_DATE, END_DATE)
+  .filter(ee.Filter.calendarRange(START_DOY, END_DOY, 'day_of_year'));
+
+// =====================
+// 处理函数（只增加波段）
+// =====================
+function process(img) {
+  return ee.Image.cat([
+    img.select('NDVI').multiply(0.0001).rename('NDVI'),
+    img.select('EVI').multiply(0.0001).rename('EVI'),
+    img.select('sur_refl_b01').multiply(0.0001).rename('Red'),
+    img.select('sur_refl_b02').multiply(0.0001).rename('NIR'),
+    img.select('sur_refl_b03').multiply(0.0001).rename('Blue'),
+    img.select('sur_refl_b07').multiply(0.0001).rename('MIR')
+  ]).copyProperties(img, ['system:time_start']);
+}
+
+var processed = modis.map(process);
+
+// =====================
+// 均值
+// =====================
+var ndviMean = processed.select('NDVI').median();
+var eviMean  = processed.select('EVI').median();
+var redMean  = processed.select('Red').median();
+var nirMean  = processed.select('NIR').median();
+var blueMean = processed.select('Blue').median();
+var mirMean  = processed.select('MIR').median();
+
+// =====================
+// 导出参数
+// =====================
+var region = world;
+var scale = 250;
+var crs = 'EPSG:4326';
+var maxPixels = 1e13;
+var folder = 'GEE_MODIS';
+
+// =====================
+// 导出
+// =====================
+Export.image.toDrive({
+  image: ndviMean,
+  description: 'MODIS_NDVI_GS_median_2015_2023_Global',
+  fileNamePrefix: 'NDVI_GS_median_2015_2023',
+  region: region,
+  scale: scale,
+  crs: crs,
+  maxPixels: maxPixels,
+  folder: folder
+});
+
+Export.image.toDrive({
+  image: eviMean,
+  description: 'MODIS_EVI_GS_median_2015_2023_Global',
+  fileNamePrefix: 'EVI_GS_median_2015_2023',
+  region: region,
+  scale: scale,
+  crs: crs,
+  maxPixels: maxPixels,
+  folder: folder
+});
+
+Export.image.toDrive({
+  image: redMean,
+  description: 'MODIS_Red_GS_median_2015_2023_Global',
+  fileNamePrefix: 'Red_GS_median_2015_2023',
+  region: region,
+  scale: scale,
+  crs: crs,
+  maxPixels: maxPixels,
+  folder: folder
+});
+
+Export.image.toDrive({
+  image: nirMean,
+  description: 'MODIS_NIR_GS_median_2015_2023_Global',
+  fileNamePrefix: 'NIR_GS_median_2015_2023',
+  region: region,
+  scale: scale,
+  crs: crs,
+  maxPixels: maxPixels,
+  folder: folder
+});
+
+Export.image.toDrive({
+  image: blueMean,
+  description: 'MODIS_Blue_GS_Mean_2015_2023_Global',
+  fileNamePrefix: 'Blue_GS_Mean_2015_2023',
+  region: region,
+  scale: scale,
+  crs: crs,
+  maxPixels: maxPixels,
+  folder: folder
+});
+
+Export.image.toDrive({
+  image: mirMean,
+  description: 'MODIS_MIR_GS_median_2015_2023_Global',
+  fileNamePrefix: 'MIR_GS_median_2015_2023',
+  region: region,
+  scale: scale,
+  crs: crs,
+  maxPixels: maxPixels,
+  folder: folder
+});

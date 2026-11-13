@@ -1,0 +1,77 @@
+// ==============================================================================
+// VIIRS VNP22Q2 全球物候特征提取 (包含水体零值填充 + 1km 双线性重采样对齐)
+// ==============================================================================
+
+var startDate = '2015-01-01';
+var endDate = '2024-01-01'; 
+
+// 1. 定义 6 个最具代表性的物候/生长季波段
+var coreBands = [
+  'Onset_Greenness_Increase_1',     // 1. SOS: 返青期开始时间
+  'Onset_Greenness_Minimum_1',      // 2. EOS: 休眠期开始时间
+  'Growing_Season_Length_1',        // 3. LOS: 生长季长度
+  'EVI2_Onset_Greenness_Maximum_1', // 4. Peak EVI2: 生长峰值的绿度
+  'EVI2_Growing_Season_Area_1',     // 5. Integrated EVI2: 生长季绿度积分
+  'Rate_Greenness_Increase_1'       // 6. Greenup Rate: 春季绿度增长速率
+];
+
+// 2. 加载 VIIRS 物候数据集并提取中值
+var viirsCol = ee.ImageCollection("NOAA/VIIRS/001/VNP22Q2")
+                 .filterDate(startDate, endDate)
+                 .select(coreBands);
+
+var originalProj = viirsCol.first().projection();
+
+// 自动对选定的 6 个波段求多年中值，剔除单一年份气候异常
+var median_pheno = viirsCol.median();
+
+// 3. CORE FIX: 全覆盖连续空间基线处理
+// - 取消 MCD12Q1 陆地掩膜约束，允许水体区域参与计算
+// - unmask(0): 将没有物候信号的区域（包括海洋、内陆湖泊、沙漠）统一填充为 0
+// - resample('bilinear'): 物理连续量使用双线性插值进行降尺度
+var processFinal = function(bandName) {
+  var singleBand = median_pheno.select(bandName);
+  
+  return singleBand.unmask(0)             
+                   .setDefaultProjection(originalProj) 
+                   .resample('bilinear'); 
+};
+
+// 循环处理 6 个波段并将其组合为一张多波段图像
+var final_bands = coreBands.map(processFinal);
+var final_image = ee.Image(final_bands);
+
+// ==============================================================================
+// 4. 前端可视化检查 (以生长季长度 LOS 为例)
+// ==============================================================================
+Map.setCenter(20.0, 0.0, 3); 
+
+// 可视化时你会发现海洋和湖泊都是深蓝色(值为0)，实现了全球无缝覆盖
+var los_viz = {
+  bands: ['Growing_Season_Length_1'],
+  min: 0, 
+  max: 300,
+  palette: ['#3b528b', '#440154', '#21908d', '#5dc963', '#fde725']
+};
+Map.addLayer(final_image, los_viz, 'VIIRS 1km Continuous Phenology (Inc. Water)', true);
+
+// ==============================================================================
+// 5. 独立波段导出设置 (循环生成 6 个单独的全球 1km TIF 文件)
+// ==============================================================================
+// 严格对齐 1km 目标网格 (30 arc-seconds)
+var cell_size = 1/120; 
+var transform_1km = [cell_size, 0, -180, 0, -cell_size, 90]; 
+var region = ee.Geometry.Rectangle([-180, -60, 180, 85], null, false);
+var export_folder = 'Global_VIIRS_Phenology_1km';
+
+coreBands.forEach(function(band) {
+  Export.image.toDrive({
+    image: final_image.select(band),
+    description: 'VIIRS_' + band + '_1km_Median_2015_2023',
+    folder: export_folder,
+    crs: 'EPSG:4326',
+    crsTransform: transform_1km, 
+    region: region,
+    maxPixels: 1e13
+  });
+});

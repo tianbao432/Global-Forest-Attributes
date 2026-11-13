@@ -1,0 +1,33 @@
+var canopy_height = ee.Image("users/nlang/ETH_GlobalCanopyHeight_2020_10m_v1");
+
+var globalRegion = ee.Geometry.Rectangle([-180, -90, 180, 90], 'EPSG:4326', false);
+
+var targetScale = 1000;
+
+var canopy_1km = canopy_height
+  .resample('bilinear') 
+  .reproject({
+    crs: 'EPSG:4326',
+    scale: targetScale
+  });
+
+
+var visParams = {
+  min: 0,
+  max: 30,
+  palette: ['#f7fcf5', '#e5f5e0', '#c7e9c0', '#a1d99b', '#74c476', '#41ab5d', '#238b45', '#006d2c', '#00441b']
+};
+Map.centerObject(globalRegion, 2);
+Map.addLayer(canopy_1km, visParams, 'Global Canopy Height (1km Bilinear)');
+
+Export.image.toDrive({
+  image: canopy_1km,
+  description: 'ETH_GlobalCanopyHeight_2020_1km_Bilinear', 
+  folder: 'ETH_GlobalCanopyHeight',   
+  scale: targetScale,     
+  region: globalRegion,  
+  crs: 'EPSG:4326',        
+  maxPixels: 1e13,       
+  fileFormat: 'GeoTIFF',
+  skipEmptyTiles: true   
+});

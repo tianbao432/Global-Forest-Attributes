@@ -1,0 +1,58 @@
+// ==============================================================================
+// GRACE Mascon CRI (V04) 全球陆地水储量异常特征提取
+// 逻辑：多年中值 + 零值填充 + 1km 双线性重采样对齐
+// ==============================================================================
+
+// 1. 设置时间范围 (建议与你之前的 VIIRS/MODIS 数据对齐)
+var startDate = '2015-01-01';
+var endDate = '2024-01-01'; 
+
+// 2. 加载数据集并选择核心波段：lwe_thickness (等效水厚度)
+// 该波段代表了地下水、土壤水和地表水的总储量异常
+var graceCol = ee.ImageCollection("NASA/GRACE/MASS_GRIDS_V04/MASCON_CRI")
+                 .filterDate(startDate, endDate)
+                 .select('lwe_thickness');
+
+var originalProj = graceCol.first().projection();
+
+// 3. 计算多年中值 (Median)
+// 能够捕捉该区域长期的水分背景值，同时剔除极端年份干扰
+var median_grace = graceCol.median();
+
+// 4. CORE FIX: 全球连续空间基线处理
+// - unmask(0): 将缺失值或非陆地观测区填充为 0
+// - resample('bilinear'): 针对重力这种连续变化的物理场，双线性插值是降尺度的标准做法
+var final_grace = median_grace
+  .unmask(0)             
+  .setDefaultProjection(originalProj) 
+  .resample('bilinear'); 
+
+// ==============================================================================
+// 5. 前端可视化检查
+// ==============================================================================
+Map.setCenter(108.5, 33.5, 4); 
+
+var grace_viz = {
+  min: -15, 
+  max: 15,
+  palette: ['#8c510a', '#d8b365', '#f6e8c3', '#f5f5f5', '#c7eae5', '#5ab4ac', '#01665e'] // 典型的水文学发散色系
+};
+Map.addLayer(final_grace, grace_viz, 'GRACE 1km Median TWS (LWE)', true);
+
+// ==============================================================================
+// 6. 导出设置 (严格对齐 1km 目标网格，与 WorldClim/MODIS 同步)
+// ==============================================================================
+var cell_size = 1/120; // 30 arc-seconds ≈ 1km
+var transform_1km = [cell_size, 0, -180, 0, -cell_size, 90]; 
+var region = ee.Geometry.Rectangle([-180, -60, 180, 85], null, false);
+
+Export.image.toDrive({
+  image: final_grace,
+  description: 'Global_GRACE_JPL_Mascon_CRI_1km_Median_2015_2023',
+  folder: 'Global_Groundwater_Feature',
+  crs: 'EPSG:4326',
+  crsTransform: transform_1km, 
+  region: region,
+  maxPixels: 1e13,
+  skipEmptyTiles: true
+});

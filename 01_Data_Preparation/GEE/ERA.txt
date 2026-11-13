@@ -1,0 +1,118 @@
+// ==============================================================================
+// 综合 ERA5-Land 全球森林驱动变量独立导出管线 (单波段逐个导出)
+// (涵盖：土壤水分、真实风速、土壤/林冠温度、辐射与热通量)
+// (2015-2023均值 -> 无覆盖设0 -> 保持原始分辨率 11132m 导出)
+// ==============================================================================
+
+var startDate = '2015-01-01';
+var endDate = '2024-01-01'; 
+
+// ==============================================================================
+// 1. 处理月度数据 (温度、土壤水分、能量通量)
+// ==============================================================================
+var monthlyCol = ee.ImageCollection("ECMWF/ERA5_LAND/MONTHLY_AGGR")
+                   .filterDate(startDate, endDate)
+                   .select([
+                     'skin_temperature', 
+                     'soil_temperature_level_1', 
+                     'soil_temperature_level_3',
+                     'volumetric_soil_water_layer_1',
+                     'volumetric_soil_water_layer_3',
+                     'surface_sensible_heat_flux_sum',
+                     'surface_latent_heat_flux_sum',
+                     'surface_net_solar_radiation_sum'
+                   ]);
+
+// 计算多年平均值
+var monthly_mean = monthlyCol.mean();
+
+// --- 1.1 物理单位转换：温度 (Kelvin 转 Celsius) ---
+var temp_C = monthly_mean.select(['skin_temperature', 'soil_temperature_level_1', 'soil_temperature_level_3'])
+                         .subtract(273.15)
+                         .rename(['Canopy_Skin_Temp_C', 'Soil_Temp_0_7cm_C', 'Soil_Temp_28_100cm_C']);
+
+// --- 1.2 提取土壤水分 (单位: 体积分数 Volume fraction) ---
+var soil_moisture = monthly_mean.select(['volumetric_soil_water_layer_1', 'volumetric_soil_water_layer_3'])
+                                .rename(['Soil_Moisture_0_7cm', 'Soil_Moisture_28_100cm']);
+
+// --- 1.3 提取能量与辐射 (单位: J/m^2) ---
+var fluxes = monthly_mean.select([
+                            'surface_sensible_heat_flux_sum', 
+                            'surface_latent_heat_flux_sum',
+                            'surface_net_solar_radiation_sum'
+                          ])
+                          .rename(['Sensible_Heat_Flux', 'Latent_Heat_Flux', 'Net_Solar_Radiation']);
+
+// ==============================================================================
+// 2. 处理逐小时数据 (计算准确的标量风速)
+// ==============================================================================
+var hourlyCol = ee.ImageCollection("ECMWF/ERA5_LAND/HOURLY")
+                  .filterDate(startDate, endDate)
+                  .select(['u_component_of_wind_10m', 'v_component_of_wind_10m']);
+
+// 定义计算绝对风速的函数: sqrt(u^2 + v^2)
+var calculateSpeed = function(image) {
+  return image.select('u_component_of_wind_10m')
+              .hypot(image.select('v_component_of_wind_10m'))
+              .rename('Wind_Speed_10m');
+};
+
+// 转换为标量风速后求多年均值
+var wind_mean = hourlyCol.map(calculateSpeed).mean();
+
+// ==============================================================================
+// 3. 数据整合与填充
+// ==============================================================================
+// 合并所有波段，并统一将 NoData (海洋、极地等) 填充为 0
+var all_variables = temp_C.addBands(soil_moisture)
+                          .addBands(fluxes)
+                          .addBands(wind_mean)
+                          .unmask(0);
+
+// ==============================================================================
+// 4. 独立导出逻辑 (逐个波段导出)
+// ==============================================================================
+var region = ee.Geometry.Rectangle([-180, -60, 180, 85], null, false);
+var export_folder = 'Global_ERA5_Drivers';
+var scale_native = 11132; // ERA5-Land 原生分辨率
+
+// 定义待导出的波段名称列表
+var bandNames = [
+  'Canopy_Skin_Temp_C',
+  'Soil_Temp_0_7cm_C',
+  'Soil_Temp_28_100cm_C',
+  'Soil_Moisture_0_7cm',
+  'Soil_Moisture_28_100cm',
+  'Sensible_Heat_Flux',
+  'Latent_Heat_Flux',
+  'Net_Solar_Radiation',
+  'Wind_Speed_10m'
+];
+
+// 遍历列表生成导出任务
+bandNames.forEach(function(name) {
+  Export.image.toDrive({
+    image: all_variables.select(name),
+    description: 'Global_' + name + '_Native_2015_2023',
+    folder: export_folder,
+    crs: 'EPSG:4326',
+    scale: scale_native, 
+    region: region,
+    maxPixels: 1e13
+  });
+});
+
+// ==============================================================================
+// 5. 可视化检查
+// ==============================================================================
+Map.setCenter(108.5, 33.5, 4); 
+
+// 可视化土壤水分 (0-0.5)
+Map.addLayer(all_variables.select('Soil_Moisture_28_100cm'), 
+  {min: 0, max: 0.5, palette: ['#051c2c', '#edf8b1', '#7fcdbb', '#2c7fb8']}, 
+  'Check: Deep Soil Moisture');
+
+// 可视化净辐射
+Map.addLayer(all_variables.select('Net_Solar_Radiation'), 
+  {min: 0, max: 2e7, palette: ['#051c2c', '#fff7bc', '#fec44f', '#d95f0e']}, 
+  'Check: Net Solar Radiation');
